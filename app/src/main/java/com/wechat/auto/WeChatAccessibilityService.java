@@ -161,7 +161,7 @@ public class WeChatAccessibilityService extends AccessibilityService {
     }
     
     /**
-     * 自动接听视频通话
+     * 自动接听视频通话 - 增强版
      */
     private void performAutoAnswer() {
         AccessibilityNodeInfo rootNode = getRootInActiveWindow();
@@ -178,17 +178,8 @@ public class WeChatAccessibilityService extends AccessibilityService {
             if (!answerButtons.isEmpty()) {
                 Log.i(TAG, "找到接听按钮（文本）: " + answerButtons.size() + " 个");
                 for (AccessibilityNodeInfo button : answerButtons) {
-                    if (button.isClickable()) {
-                        boolean success = button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                        Log.i(TAG, "✓ 点击接听按钮: " + success);
-                        if (success) return;
-                    }
-                    // 尝试点击父节点
-                    AccessibilityNodeInfo parent = button.getParent();
-                    if (parent != null && parent.isClickable()) {
-                        boolean success = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                        Log.i(TAG, "✓ 点击接听按钮父节点: " + success);
-                        if (success) return;
+                    if (tryClickNode(button, "接听按钮")) {
+                        return;
                     }
                 }
             }
@@ -198,7 +189,9 @@ public class WeChatAccessibilityService extends AccessibilityService {
                 "com.tencent.mm:id/accept_btn",
                 "com.tencent.mm:id/btn_accept",
                 "com.tencent.mm:id/voip_accept_btn",
-                "com.tencent.mm:id/video_accept_btn"
+                "com.tencent.mm:id/video_accept_btn",
+                "com.tencent.mm:id/answer_btn",
+                "com.tencent.mm:id/btn_answer"
             };
             
             for (String viewId : viewIds) {
@@ -206,30 +199,84 @@ public class WeChatAccessibilityService extends AccessibilityService {
                 if (!buttons.isEmpty()) {
                     Log.i(TAG, "找到接听按钮（ID: " + viewId + "）");
                     for (AccessibilityNodeInfo button : buttons) {
-                        if (button.isClickable()) {
-                            boolean success = button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                            Log.i(TAG, "✓ 点击接听按钮: " + success);
-                            if (success) return;
+                        if (tryClickNode(button, "ID按钮")) {
+                            return;
                         }
                     }
                 }
             }
             
-            // 方法3: 查找包含"接"字的按钮
-            List<AccessibilityNodeInfo> buttons = findClickableNodes(rootNode);
-            for (AccessibilityNodeInfo button : buttons) {
+            // 方法3: 智能查找 - 通过位置和大小判断（绿色按钮通常在屏幕下方中间）
+            List<AccessibilityNodeInfo> allButtons = findAllClickableButtons(rootNode);
+            Log.i(TAG, "找到所有可点击按钮: " + allButtons.size() + " 个");
+            
+            // 获取屏幕尺寸
+            android.graphics.Rect screenBounds = new android.graphics.Rect();
+            rootNode.getBoundsInScreen(screenBounds);
+            int screenHeight = screenBounds.height();
+            int screenWidth = screenBounds.width();
+            
+            Log.i(TAG, "屏幕尺寸: " + screenWidth + "x" + screenHeight);
+            
+            // 查找位于屏幕下半部分、居中的大按钮（很可能是接听按钮）
+            for (AccessibilityNodeInfo button : allButtons) {
+                android.graphics.Rect bounds = new android.graphics.Rect();
+                button.getBoundsInScreen(bounds);
+                
+                int buttonCenterY = (bounds.top + bounds.bottom) / 2;
+                int buttonCenterX = (bounds.left + bounds.right) / 2;
+                int buttonWidth = bounds.width();
+                int buttonHeight = bounds.height();
+                
+                // 判断条件：
+                // 1. 在屏幕下半部分（Y > 50%）
+                // 2. 水平居中（X 在 30%-70% 之间）
+                // 3. 按钮足够大（宽度 > 100px，高度 > 100px）
+                boolean inBottomHalf = buttonCenterY > screenHeight * 0.5;
+                boolean horizontallyCentered = buttonCenterX > screenWidth * 0.3 && 
+                                               buttonCenterX < screenWidth * 0.7;
+                boolean largeEnough = buttonWidth > 100 && buttonHeight > 100;
+                
+                if (inBottomHalf && horizontallyCentered && largeEnough) {
+                    CharSequence text = button.getText();
+                    CharSequence desc = button.getContentDescription();
+                    String className = button.getClassName() != null ? button.getClassName().toString() : "";
+                    
+                    Log.i(TAG, String.format("找到可能的接听按钮 - 位置: (%d,%d), 大小: %dx%d, 文本: %s, 描述: %s, 类: %s",
+                        buttonCenterX, buttonCenterY, buttonWidth, buttonHeight, text, desc, className));
+                    
+                    if (tryClickNode(button, "位置判断按钮")) {
+                        return;
+                    }
+                }
+            }
+            
+            // 方法4: 查找包含"接"字或相关关键词的按钮
+            for (AccessibilityNodeInfo button : allButtons) {
                 CharSequence text = button.getText();
                 CharSequence desc = button.getContentDescription();
                 String textStr = text != null ? text.toString() : "";
                 String descStr = desc != null ? desc.toString() : "";
                 
                 if (textStr.contains("接") || descStr.contains("接") ||
-                    textStr.contains("answer") || descStr.contains("answer")) {
-                    Log.i(TAG, "找到可能的接听按钮: " + textStr + " / " + descStr);
-                    boolean success = button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                    Log.i(TAG, "✓ 尝试点击: " + success);
-                    if (success) return;
+                    textStr.contains("answer") || descStr.contains("answer") ||
+                    textStr.contains("Accept") || descStr.contains("Accept")) {
+                    
+                    Log.i(TAG, "找到可能的接听按钮（关键词）: " + textStr + " / " + descStr);
+                    if (tryClickNode(button, "关键词按钮")) {
+                        return;
+                    }
                 }
+            }
+            
+            // 方法5: 最后尝试 - 点击屏幕下方中间位置（绿色按钮的常见位置）
+            Log.i(TAG, "尝试点击屏幕下方中间位置...");
+            int clickX = screenWidth / 2;
+            int clickY = (int)(screenHeight * 0.75); // 屏幕 75% 高度位置
+            
+            if (performGlobalClick(clickX, clickY)) {
+                Log.i(TAG, "✓ 已点击屏幕位置: (" + clickX + ", " + clickY + ")");
+                return;
             }
             
             Log.w(TAG, "未找到接听按钮");
@@ -245,24 +292,90 @@ public class WeChatAccessibilityService extends AccessibilityService {
     }
     
     /**
-     * 查找所有可点击的节点
+     * 尝试点击节点（包括父节点）
      */
-    private List<AccessibilityNodeInfo> findClickableNodes(AccessibilityNodeInfo node) {
-        List<AccessibilityNodeInfo> clickableNodes = new java.util.ArrayList<>();
-        if (node == null) return clickableNodes;
+    private boolean tryClickNode(AccessibilityNodeInfo node, String source) {
+        if (node == null) return false;
         
+        // 尝试直接点击
         if (node.isClickable()) {
-            clickableNodes.add(node);
+            boolean success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            Log.i(TAG, "✓ 点击" + source + ": " + success);
+            if (success) return true;
+        }
+        
+        // 尝试点击父节点
+        AccessibilityNodeInfo parent = node.getParent();
+        if (parent != null && parent.isClickable()) {
+            boolean success = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            Log.i(TAG, "✓ 点击" + source + "父节点: " + success);
+            if (success) return true;
+        }
+        
+        // 尝试通过坐标点击
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        node.getBoundsInScreen(bounds);
+        int centerX = (bounds.left + bounds.right) / 2;
+        int centerY = (bounds.top + bounds.bottom) / 2;
+        
+        if (performGlobalClick(centerX, centerY)) {
+            Log.i(TAG, "✓ 通过坐标点击" + source + ": (" + centerX + ", " + centerY + ")");
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 通过全局坐标点击（需要 Android 7.0+）
+     */
+    private boolean performGlobalClick(int x, int y) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            try {
+                android.graphics.Path path = new android.graphics.Path();
+                path.moveTo(x, y);
+                
+                android.accessibilityservice.GestureDescription.StrokeDescription stroke = 
+                    new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 100);
+                
+                android.accessibilityservice.GestureDescription gesture = 
+                    new android.accessibilityservice.GestureDescription.Builder()
+                        .addStroke(stroke)
+                        .build();
+                
+                return dispatchGesture(gesture, null, null);
+            } catch (Exception e) {
+                Log.e(TAG, "全局点击失败: " + e.getMessage());
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * 查找所有可点击的按钮
+     */
+    private List<AccessibilityNodeInfo> findAllClickableButtons(AccessibilityNodeInfo node) {
+        List<AccessibilityNodeInfo> buttons = new java.util.ArrayList<>();
+        if (node == null) return buttons;
+        
+        String className = node.getClassName() != null ? node.getClassName().toString() : "";
+        
+        // 只收集按钮类型的节点
+        if (node.isClickable() && (
+            className.contains("Button") || 
+            className.contains("ImageView") ||
+            className.contains("TextView"))) {
+            buttons.add(node);
         }
         
         for (int i = 0; i < node.getChildCount(); i++) {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child != null) {
-                clickableNodes.addAll(findClickableNodes(child));
+                buttons.addAll(findAllClickableButtons(child));
             }
         }
         
-        return clickableNodes;
+        return buttons;
     }
     
     /**
