@@ -61,12 +61,41 @@ public class WeChatAccessibilityService extends AccessibilityService {
         String className = event.getClassName() != null ? event.getClassName().toString() : "";
         Log.d(TAG, "窗口变化: " + className);
         
-        // 检测视频通话界面
-        if (className.contains("VoipActivity") || className.contains("VideoActivity")) {
+        // 检测视频通话界面 - 扩展更多可能的类名
+        if (className.contains("Voip") || 
+            className.contains("Video") || 
+            className.contains("voip") ||
+            className.contains("video") ||
+            className.contains("Call") ||
+            className.contains("call")) {
+            
             if (configManager.isAutoAnswerEnabled()) {
-                Log.i(TAG, "检测到视频通话，尝试自动接听");
-                performAutoAnswer();
+                Log.i(TAG, "检测到可能的通话界面: " + className);
+                // 延迟一下，等待界面完全加载
+                handler.postDelayed(() -> {
+                    Log.i(TAG, "尝试自动接听...");
+                    performAutoAnswer();
+                }, 500);
             }
+        }
+        
+        // 额外检查：直接查找接听按钮
+        if (configManager.isAutoAnswerEnabled()) {
+            handler.postDelayed(() -> {
+                AccessibilityNodeInfo rootNode = getRootInActiveWindow();
+                if (rootNode != null) {
+                    try {
+                        // 快速检查是否有接听按钮
+                        List<AccessibilityNodeInfo> answerButtons = rootNode.findAccessibilityNodeInfosByText("接听");
+                        if (!answerButtons.isEmpty()) {
+                            Log.i(TAG, "发现接听按钮，立即处理");
+                            performAutoAnswer();
+                        }
+                    } finally {
+                        rootNode.recycle();
+                    }
+                }
+            }, 300);
         }
     }
     
@@ -105,12 +134,27 @@ public class WeChatAccessibilityService extends AccessibilityService {
         if (!configManager.isAutoAnswerEnabled()) return;
         
         List<CharSequence> texts = event.getText();
+        Log.d(TAG, "收到通知，文本数量: " + texts.size());
+        
         for (CharSequence text : texts) {
             String content = text.toString();
-            if (content.contains("视频通话") || content.contains("语音通话")) {
-                Log.i(TAG, "检测到通话通知");
+            Log.d(TAG, "通知内容: " + content);
+            
+            // 扩展检测关键词
+            if (content.contains("视频通话") || 
+                content.contains("语音通话") ||
+                content.contains("视频聊天") ||
+                content.contains("来电") ||
+                content.contains("呼叫") ||
+                content.toLowerCase().contains("video") ||
+                content.toLowerCase().contains("call")) {
+                
+                Log.i(TAG, "检测到通话通知: " + content);
                 // 延迟处理，等待界面打开
-                handler.postDelayed(() -> performAutoAnswer(), 1000);
+                handler.postDelayed(() -> {
+                    Log.i(TAG, "通知触发，尝试接听...");
+                    performAutoAnswer();
+                }, 1500);
                 break;
             }
         }
@@ -121,26 +165,127 @@ public class WeChatAccessibilityService extends AccessibilityService {
      */
     private void performAutoAnswer() {
         AccessibilityNodeInfo rootNode = getRootInActiveWindow();
-        if (rootNode == null) return;
+        if (rootNode == null) {
+            Log.w(TAG, "无法获取根节点");
+            return;
+        }
         
         try {
-            // 查找接听按钮
+            Log.i(TAG, "开始查找接听按钮...");
+            
+            // 方法1: 通过文本查找 "接听"
             List<AccessibilityNodeInfo> answerButtons = rootNode.findAccessibilityNodeInfosByText("接听");
-            if (answerButtons.isEmpty()) {
-                answerButtons = rootNode.findAccessibilityNodeInfosByViewId("com.tencent.mm:id/accept_btn");
+            if (!answerButtons.isEmpty()) {
+                Log.i(TAG, "找到接听按钮（文本）: " + answerButtons.size() + " 个");
+                for (AccessibilityNodeInfo button : answerButtons) {
+                    if (button.isClickable()) {
+                        boolean success = button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                        Log.i(TAG, "✓ 点击接听按钮: " + success);
+                        if (success) return;
+                    }
+                    // 尝试点击父节点
+                    AccessibilityNodeInfo parent = button.getParent();
+                    if (parent != null && parent.isClickable()) {
+                        boolean success = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                        Log.i(TAG, "✓ 点击接听按钮父节点: " + success);
+                        if (success) return;
+                    }
+                }
             }
             
-            for (AccessibilityNodeInfo button : answerButtons) {
-                if (button.isClickable()) {
-                    button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                    Log.i(TAG, "✓ 已自动接听");
-                    return;
+            // 方法2: 通过 View ID 查找
+            String[] viewIds = {
+                "com.tencent.mm:id/accept_btn",
+                "com.tencent.mm:id/btn_accept",
+                "com.tencent.mm:id/voip_accept_btn",
+                "com.tencent.mm:id/video_accept_btn"
+            };
+            
+            for (String viewId : viewIds) {
+                List<AccessibilityNodeInfo> buttons = rootNode.findAccessibilityNodeInfosByViewId(viewId);
+                if (!buttons.isEmpty()) {
+                    Log.i(TAG, "找到接听按钮（ID: " + viewId + "）");
+                    for (AccessibilityNodeInfo button : buttons) {
+                        if (button.isClickable()) {
+                            boolean success = button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                            Log.i(TAG, "✓ 点击接听按钮: " + success);
+                            if (success) return;
+                        }
+                    }
+                }
+            }
+            
+            // 方法3: 查找包含"接"字的按钮
+            List<AccessibilityNodeInfo> buttons = findClickableNodes(rootNode);
+            for (AccessibilityNodeInfo button : buttons) {
+                CharSequence text = button.getText();
+                CharSequence desc = button.getContentDescription();
+                String textStr = text != null ? text.toString() : "";
+                String descStr = desc != null ? desc.toString() : "";
+                
+                if (textStr.contains("接") || descStr.contains("接") ||
+                    textStr.contains("answer") || descStr.contains("answer")) {
+                    Log.i(TAG, "找到可能的接听按钮: " + textStr + " / " + descStr);
+                    boolean success = button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                    Log.i(TAG, "✓ 尝试点击: " + success);
+                    if (success) return;
                 }
             }
             
             Log.w(TAG, "未找到接听按钮");
+            // 打印界面信息用于调试
+            printNodeInfo(rootNode, 0);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "自动接听异常: " + e.getMessage());
+            e.printStackTrace();
         } finally {
             rootNode.recycle();
+        }
+    }
+    
+    /**
+     * 查找所有可点击的节点
+     */
+    private List<AccessibilityNodeInfo> findClickableNodes(AccessibilityNodeInfo node) {
+        List<AccessibilityNodeInfo> clickableNodes = new java.util.ArrayList<>();
+        if (node == null) return clickableNodes;
+        
+        if (node.isClickable()) {
+            clickableNodes.add(node);
+        }
+        
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                clickableNodes.addAll(findClickableNodes(child));
+            }
+        }
+        
+        return clickableNodes;
+    }
+    
+    /**
+     * 打印节点信息（用于调试）
+     */
+    private void printNodeInfo(AccessibilityNodeInfo node, int depth) {
+        if (node == null || depth > 3) return; // 限制深度避免日志过多
+        
+        String indent = new String(new char[depth * 2]).replace('\0', ' ');
+        String text = node.getText() != null ? node.getText().toString() : "";
+        String desc = node.getContentDescription() != null ? node.getContentDescription().toString() : "";
+        String viewId = node.getViewIdResourceName() != null ? node.getViewIdResourceName() : "";
+        
+        if (!text.isEmpty() || !desc.isEmpty() || !viewId.isEmpty()) {
+            Log.d(TAG, indent + "Node: text=" + text + ", desc=" + desc + 
+                  ", id=" + viewId + ", clickable=" + node.isClickable());
+        }
+        
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                printNodeInfo(child, depth + 1);
+            }
         }
     }
     
