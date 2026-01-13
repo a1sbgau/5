@@ -353,36 +353,50 @@ public class WeChatAccessibilityService extends AccessibilityService {
         
         LogManager.log("尝试点击: " + source);
         
-        // 尝试直接点击
-        if (node.isClickable()) {
-            boolean success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-            Log.i(TAG, "✓ 点击" + source + ": " + success);
-            LogManager.log("直接点击: " + (success ? "成功" : "失败"));
-            if (success) return true;
-        }
-        
-        // 尝试点击父节点
-        AccessibilityNodeInfo parent = node.getParent();
-        if (parent != null && parent.isClickable()) {
-            boolean success = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-            Log.i(TAG, "✓ 点击" + source + "父节点: " + success);
-            LogManager.log("点击父节点: " + (success ? "成功" : "失败"));
-            if (success) return true;
-        }
-        
-        // 尝试通过坐标点击
+        // 获取节点的屏幕坐标
         android.graphics.Rect bounds = new android.graphics.Rect();
         node.getBoundsInScreen(bounds);
         int centerX = (bounds.left + bounds.right) / 2;
         int centerY = (bounds.top + bounds.bottom) / 2;
         
-        LogManager.log("坐标点击: (" + centerX + "," + centerY + ")");
+        LogManager.log("按钮位置: (" + centerX + "," + centerY + ")");
+        LogManager.log("按钮大小: " + bounds.width() + "x" + bounds.height());
+        
+        // 优先使用坐标点击（更可靠）
         if (performGlobalClick(centerX, centerY)) {
             Log.i(TAG, "✓ 通过坐标点击" + source + ": (" + centerX + ", " + centerY + ")");
-            LogManager.log("✓ 坐标点击成功！");
+            LogManager.log("✓✓✓ 坐标点击成功！");
             return true;
         }
         
+        // 备用：尝试直接点击节点
+        if (node.isClickable()) {
+            boolean success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            Log.i(TAG, "✓ 点击" + source + ": " + success);
+            LogManager.log("节点点击: " + (success ? "成功" : "失败"));
+            if (success) {
+                // 即使返回 true，也再用坐标点击一次确保成功
+                handler.postDelayed(() -> performGlobalClick(centerX, centerY), 100);
+                return true;
+            }
+        }
+        
+        // 尝试点击父节点
+        AccessibilityNodeInfo parent = node.getParent();
+        if (parent != null) {
+            android.graphics.Rect parentBounds = new android.graphics.Rect();
+            parent.getBoundsInScreen(parentBounds);
+            int parentX = (parentBounds.left + parentBounds.right) / 2;
+            int parentY = (parentBounds.top + parentBounds.bottom) / 2;
+            
+            LogManager.log("尝试父节点: (" + parentX + "," + parentY + ")");
+            if (performGlobalClick(parentX, parentY)) {
+                LogManager.log("✓ 父节点坐标点击成功！");
+                return true;
+            }
+        }
+        
+        LogManager.log("✗ 所有点击方法都失败");
         return false;
     }
     
@@ -392,21 +406,62 @@ public class WeChatAccessibilityService extends AccessibilityService {
     private boolean performGlobalClick(int x, int y) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
             try {
+                LogManager.log("执行手势点击: (" + x + "," + y + ")");
+                
                 android.graphics.Path path = new android.graphics.Path();
                 path.moveTo(x, y);
                 
+                // 增加点击时长，确保被识别
                 android.accessibilityservice.GestureDescription.StrokeDescription stroke = 
-                    new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 100);
+                    new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 150);
                 
                 android.accessibilityservice.GestureDescription gesture = 
                     new android.accessibilityservice.GestureDescription.Builder()
                         .addStroke(stroke)
                         .build();
                 
-                return dispatchGesture(gesture, null, null);
+                boolean result = dispatchGesture(gesture, new android.accessibilityservice.AccessibilityService.GestureResultCallback() {
+                    @Override
+                    public void onCompleted(android.accessibilityservice.GestureDescription gestureDescription) {
+                        super.onCompleted(gestureDescription);
+                        Log.i(TAG, "手势执行完成");
+                        LogManager.log("✓ 手势执行完成");
+                    }
+                    
+                    @Override
+                    public void onCancelled(android.accessibilityservice.GestureDescription gestureDescription) {
+                        super.onCancelled(gestureDescription);
+                        Log.w(TAG, "手势被取消");
+                        LogManager.log("✗ 手势被取消");
+                    }
+                }, null);
+                
+                LogManager.log("手势分发结果: " + result);
+                
+                // 多次点击确保成功
+                if (result) {
+                    handler.postDelayed(() -> {
+                        LogManager.log("再次点击确保成功");
+                        android.graphics.Path path2 = new android.graphics.Path();
+                        path2.moveTo(x, y);
+                        android.accessibilityservice.GestureDescription.StrokeDescription stroke2 = 
+                            new android.accessibilityservice.GestureDescription.StrokeDescription(path2, 0, 150);
+                        android.accessibilityservice.GestureDescription gesture2 = 
+                            new android.accessibilityservice.GestureDescription.Builder()
+                                .addStroke(stroke2)
+                                .build();
+                        dispatchGesture(gesture2, null, null);
+                    }, 200);
+                }
+                
+                return result;
             } catch (Exception e) {
                 Log.e(TAG, "全局点击失败: " + e.getMessage());
+                LogManager.log("✗ 全局点击异常: " + e.getMessage());
+                e.printStackTrace();
             }
+        } else {
+            LogManager.log("✗ Android 版本过低，不支持手势点击");
         }
         return false;
     }
