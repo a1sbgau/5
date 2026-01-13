@@ -1329,11 +1329,34 @@ public class WeChatAccessibilityService extends AccessibilityService {
         android.accessibilityservice.AccessibilityServiceInfo serviceInfo = getServiceInfo();
         if (serviceInfo != null) {
             LogManager.log("服务能力:");
-            LogManager.log("- 可执行手势: " + serviceInfo.canPerformGestures());
-            LogManager.log("- 可获取窗口内容: " + serviceInfo.canRetrieveWindowContent());
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                LogManager.log("- 可截图: " + serviceInfo.canTakeScreenshot());
+            
+            // 检查手势支持（API 24+）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    // 使用反射检查方法是否存在
+                    boolean canPerformGestures = (serviceInfo.flags & android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE) != 0;
+                    LogManager.log("- 可执行手势: " + canPerformGestures);
+                } catch (Exception e) {
+                    LogManager.log("- 可执行手势: 未知（检查失败）");
+                }
+            } else {
+                LogManager.log("- 可执行手势: 不支持（需要API 24+）");
             }
+            
+            // 检查窗口内容获取
+            boolean canRetrieveWindow = (serviceInfo.flags & android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS) != 0;
+            LogManager.log("- 可获取窗口内容: " + canRetrieveWindow);
+            
+            // 检查截图能力（API 30+）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                LogManager.log("- 可截图: 支持（API 30+）");
+            } else {
+                LogManager.log("- 可截图: 不支持（需要API 30+）");
+            }
+            
+            // 显示其他重要标志
+            LogManager.log("服务标志: " + serviceInfo.flags);
+            LogManager.log("事件类型: " + serviceInfo.eventTypes);
         } else {
             LogManager.log("✗ 无法获取服务信息");
         }
@@ -1347,6 +1370,51 @@ public class WeChatAccessibilityService extends AccessibilityService {
         }
         
         LogManager.log("=== 系统诊断完成 ===");
+        
+        // 7. 提供解决方案提示
+        provideSolutionTips(sdkVersion, accessibilityEnabled);
+    }
+    
+    /**
+     * 提供解决方案提示
+     */
+    private void provideSolutionTips(int sdkVersion, boolean accessibilityEnabled) {
+        LogManager.log("=== 解决方案提示 ===");
+        
+        if (!accessibilityEnabled) {
+            LogManager.log("❌ 无障碍服务未启用");
+            LogManager.log("解决方案:");
+            LogManager.log("1. 打开手机「设置」→「无障碍」");
+            LogManager.log("2. 找到「微信自动回复」服务");
+            LogManager.log("3. 开启该服务");
+            LogManager.log("4. 重启应用");
+        }
+        
+        if (sdkVersion < Build.VERSION_CODES.N) {
+            LogManager.log("❌ Android版本过低，不支持手势操作");
+            LogManager.log("解决方案:");
+            LogManager.log("1. 升级到Android 7.0+以支持手势点击");
+            LogManager.log("2. 或者使用root权限的Shell命令点击");
+        }
+        
+        if (sdkVersion < Build.VERSION_CODES.R) {
+            LogManager.log("⚠️ Android版本较低，不支持截图识别");
+            LogManager.log("解决方案:");
+            LogManager.log("1. 升级到Android 11+以支持截图");
+            LogManager.log("2. 当前会使用节点文本分析作为备用方案");
+        }
+        
+        // 检查是否需要特殊权限
+        LogManager.log("📋 权限清单检查:");
+        LogManager.log("□ 无障碍服务权限 - " + (accessibilityEnabled ? "✓" : "✗"));
+        LogManager.log("□ 手势操作权限 - " + (sdkVersion >= Build.VERSION_CODES.N ? "✓" : "✗"));
+        LogManager.log("□ 截图权限 - " + (sdkVersion >= Build.VERSION_CODES.R ? "✓" : "✗"));
+        
+        LogManager.log("💡 常见问题:");
+        LogManager.log("• 如果点击无效，请检查是否在微信中");
+        LogManager.log("• 如果截图失败，请重启服务");
+        LogManager.log("• 部分手机需要关闭「电池优化」");
+        LogManager.log("• 华为/小米等需要额外的权限设置");
     }
     
     /**
