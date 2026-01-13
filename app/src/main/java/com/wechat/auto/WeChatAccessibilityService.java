@@ -31,6 +31,11 @@ public class WeChatAccessibilityService extends AccessibilityService {
     private static final String TAG = "WeChatAutoService";
     private static final String WECHAT_PACKAGE = "com.tencent.mm";
     
+    // 截图错误码常量（Android 11+）
+    private static final int ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR = 1;
+    private static final int ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS = 2;
+    private static final int ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT = 3;
+    
     private ConfigManager configManager;
     private Map<String, Long> lastSendTime = new HashMap<>();
     private String lastProcessedMessage = "";
@@ -47,6 +52,9 @@ public class WeChatAccessibilityService extends AccessibilityService {
     public void onCreate() {
         super.onCreate();
         configManager = new ConfigManager(this);
+        
+        // 执行系统诊断
+        performSystemDiagnosis();
         
         // 获取屏幕尺寸
         WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
@@ -73,9 +81,16 @@ public class WeChatAccessibilityService extends AccessibilityService {
                 handler.postDelayed(this, 2000);
             }
         };
-        handler.postDelayed(periodicCheckRunnable, 2000);
+        handler.postDelayed(periodicCheckRunnable, 5000); // 5秒后开始检查
         
-        Log.i(TAG, "服务已创建");
+        // 10秒后执行功能测试
+        handler.postDelayed(() -> {
+            LogManager.log("=== 开始功能测试 ===");
+            testClickFunction();
+            handler.postDelayed(() -> testScreenshotFunction(), 2000);
+        }, 10000);
+        
+        Log.i(TAG, "✓ 无障碍服务已启动");
     }
     
     @Override
@@ -1285,6 +1300,172 @@ public class WeChatAccessibilityService extends AccessibilityService {
             Log.e(TAG, "查找绿色中心异常: " + e.getMessage());
             LogManager.log("✗ 查找绿色中心异常: " + e.getMessage());
             return null;
+        }
+    }
+    
+    /**
+     * 系统诊断 - 检查所有必要的权限和配置
+     */
+    private void performSystemDiagnosis() {
+        LogManager.log("=== 开始系统诊断 ===");
+        
+        // 1. 检查Android版本
+        int sdkVersion = Build.VERSION.SDK_INT;
+        LogManager.log("Android版本: " + Build.VERSION.RELEASE + " (SDK " + sdkVersion + ")");
+        
+        // 2. 检查无障碍服务权限
+        boolean accessibilityEnabled = isServiceEnabled(this);
+        LogManager.log("无障碍服务状态: " + (accessibilityEnabled ? "已启用" : "未启用"));
+        
+        // 3. 检查手势支持
+        boolean gestureSupported = sdkVersion >= Build.VERSION_CODES.N;
+        LogManager.log("手势支持: " + (gestureSupported ? "支持" : "不支持 (需要Android 7.0+)"));
+        
+        // 4. 检查截图支持
+        boolean screenshotSupported = sdkVersion >= Build.VERSION_CODES.R;
+        LogManager.log("截图支持: " + (screenshotSupported ? "支持" : "不支持 (需要Android 11+)"));
+        
+        // 5. 检查服务信息
+        android.accessibilityservice.AccessibilityServiceInfo serviceInfo = getServiceInfo();
+        if (serviceInfo != null) {
+            LogManager.log("服务能力:");
+            LogManager.log("- 可执行手势: " + serviceInfo.canPerformGestures());
+            LogManager.log("- 可获取窗口内容: " + serviceInfo.canRetrieveWindowContent());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                LogManager.log("- 可截图: " + serviceInfo.canTakeScreenshot());
+            }
+        } else {
+            LogManager.log("✗ 无法获取服务信息");
+        }
+        
+        // 6. 检查设置权限
+        try {
+            boolean canWriteSettings = Settings.System.canWrite(this);
+            LogManager.log("系统设置权限: " + (canWriteSettings ? "已授权" : "未授权"));
+        } catch (Exception e) {
+            LogManager.log("系统设置权限检查失败: " + e.getMessage());
+        }
+        
+        LogManager.log("=== 系统诊断完成 ===");
+    }
+    
+    /**
+     * 测试截图功能
+     */
+    private void testScreenshotFunction() {
+        LogManager.log("=== 测试截图功能 ===");
+        
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            LogManager.log("✗ 当前Android版本不支持无障碍截图");
+            return;
+        }
+        
+        try {
+            LogManager.log("开始测试截图...");
+            takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), 
+                new AccessibilityService.TakeScreenshotCallback() {
+                    @Override
+                    public void onSuccess(AccessibilityService.ScreenshotResult screenshotResult) {
+                        try {
+                            LogManager.log("✓ 截图API调用成功");
+                            
+                            if (screenshotResult.getHardwareBuffer() != null) {
+                                LogManager.log("✓ 获得HardwareBuffer");
+                                
+                                Bitmap bitmap = Bitmap.wrapHardwareBuffer(
+                                    screenshotResult.getHardwareBuffer(),
+                                    screenshotResult.getColorSpace()
+                                );
+                                
+                                if (bitmap != null) {
+                                    LogManager.log("✓ 截图成功: " + bitmap.getWidth() + "x" + bitmap.getHeight());
+                                    bitmap.recycle();
+                                } else {
+                                    LogManager.log("✗ Bitmap创建失败");
+                                }
+                            } else {
+                                LogManager.log("✗ HardwareBuffer为空");
+                            }
+                        } catch (Exception e) {
+                            LogManager.log("✗ 截图处理异常: " + e.getMessage());
+                            e.printStackTrace();
+                        }
+                    }
+                    
+                    @Override
+                    public void onFailure(int errorCode) {
+                        LogManager.log("✗ 截图失败，错误码: " + errorCode);
+                        
+                        // 解释错误码
+                        String errorMsg = "未知错误";
+                        switch (errorCode) {
+                            case ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR:
+                                errorMsg = "内部错误";
+                                break;
+                            case ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS:
+                                errorMsg = "无无障碍权限";
+                                break;
+                            case ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT:
+                                errorMsg = "截图间隔时间太短";
+                                break;
+                        }
+                        LogManager.log("错误详情: " + errorMsg);
+                    }
+                });
+        } catch (Exception e) {
+            LogManager.log("✗ 截图测试异常: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    /**
+     * 测试点击功能
+     */
+    private void testClickFunction() {
+        LogManager.log("=== 测试点击功能 ===");
+        
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            LogManager.log("✗ 当前Android版本不支持手势点击");
+            return;
+        }
+        
+        // 测试点击屏幕中心
+        int testX = screenWidth / 2;
+        int testY = screenHeight / 2;
+        
+        LogManager.log("测试点击屏幕中心: (" + testX + ", " + testY + ")");
+        
+        try {
+            android.graphics.Path path = new android.graphics.Path();
+            path.moveTo(testX, testY);
+            
+            android.accessibilityservice.GestureDescription.StrokeDescription stroke = 
+                new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 100);
+            
+            android.accessibilityservice.GestureDescription gesture = 
+                new android.accessibilityservice.GestureDescription.Builder()
+                    .addStroke(stroke)
+                    .build();
+            
+            boolean result = dispatchGesture(gesture, new android.accessibilityservice.AccessibilityService.GestureResultCallback() {
+                @Override
+                public void onCompleted(android.accessibilityservice.GestureDescription gestureDescription) {
+                    super.onCompleted(gestureDescription);
+                    LogManager.log("✓ 测试点击完成");
+                }
+                
+                @Override
+                public void onCancelled(android.accessibilityservice.GestureDescription gestureDescription) {
+                    super.onCancelled(gestureDescription);
+                    LogManager.log("✗ 测试点击被取消");
+                }
+            }, null);
+            
+            LogManager.log("手势分发结果: " + (result ? "成功" : "失败"));
+            
+        } catch (Exception e) {
+            LogManager.log("✗ 点击测试异常: " + e.getMessage());
+            e.printStackTrace();
         }
     }
     
