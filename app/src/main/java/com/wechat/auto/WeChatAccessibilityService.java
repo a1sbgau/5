@@ -654,11 +654,12 @@ public class WeChatAccessibilityService extends AccessibilityService {
         // 方法2: 尝试多次短手势点击
         try {
             for (int i = 0; i < 5; i++) {
+                final int attemptNumber = i + 1; // Create a final copy for use in inner class
                 android.graphics.Path path = new android.graphics.Path();
                 path.moveTo(x, y);
                 
                 // 尝试不同的点击时长
-                int duration = (i + 1) * 100; // 100ms, 200ms, 300ms, 400ms, 500ms
+                int duration = attemptNumber * 100; // 100ms, 200ms, 300ms, 400ms, 500ms
                 android.accessibilityservice.GestureDescription.StrokeDescription stroke = 
                     new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, duration);
                 
@@ -670,16 +671,16 @@ public class WeChatAccessibilityService extends AccessibilityService {
                 boolean result = dispatchGesture(gesture, new android.accessibilityservice.AccessibilityService.GestureResultCallback() {
                     @Override
                     public void onCompleted(android.accessibilityservice.GestureDescription gestureDescription) {
-                        LogManager.log("✓ 备用手势 " + (i + 1) + " 完成");
+                        LogManager.log("✓ 备用手势 " + attemptNumber + " 完成");
                     }
                     
                     @Override
                     public void onCancelled(android.accessibilityservice.GestureDescription gestureDescription) {
-                        LogManager.log("✗ 备用手势 " + (i + 1) + " 取消");
+                        LogManager.log("✗ 备用手势 " + attemptNumber + " 取消");
                     }
                 }, null);
                 
-                LogManager.log("备用点击 " + (i + 1) + "/5 (时长" + duration + "ms): " + result);
+                LogManager.log("备用点击 " + attemptNumber + "/5 (时长" + duration + "ms): " + result);
                 
                 if (result) {
                     Thread.sleep(300); // 等待较长时间
