@@ -10,6 +10,7 @@ import android.hardware.display.VirtualDisplay;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.projection.MediaProjection;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -615,31 +616,6 @@ public class WeChatAccessibilityService extends AccessibilityService {
     }
     
     /**
-     * 简单手势点击（用于确认）
-     */
-    private boolean performSimpleClick(int x, int y) {
-        try {
-            android.graphics.Path path = new android.graphics.Path();
-            path.moveTo(x, y);
-            
-            android.accessibilityservice.GestureDescription.StrokeDescription stroke = 
-                new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 150);
-            
-            android.accessibilityservice.GestureDescription gesture = 
-                new android.accessibilityservice.GestureDescription.Builder()
-                    .addStroke(stroke)
-                    .build();
-            
-            boolean result = dispatchGesture(gesture, null, null);
-            LogManager.log("确认点击结果: " + result);
-            return result;
-        } catch (Exception e) {
-            LogManager.log("确认点击失败: " + e.getMessage());
-            return false;
-        }
-    }
-    
-    /**
      * 备用点击方法
      */
     private boolean performBackupClick(int x, int y) {
@@ -956,22 +932,100 @@ public class WeChatAccessibilityService extends AccessibilityService {
     }
     
     /**
-     * 截图并识别绿色按钮位置
+     * 简单点击方法
+     */
+    private boolean performSimpleClick(int x, int y) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                LogManager.log("执行简单点击: (" + x + "," + y + ")");
+                
+                android.graphics.Path path = new android.graphics.Path();
+                path.moveTo(x, y);
+                
+                android.accessibilityservice.GestureDescription.StrokeDescription stroke = 
+                    new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 150);
+                
+                android.accessibilityservice.GestureDescription gesture = 
+                    new android.accessibilityservice.GestureDescription.Builder()
+                        .addStroke(stroke)
+                        .build();
+                
+                final boolean[] completed = {false};
+                final boolean[] success = {false};
+                
+                boolean result = dispatchGesture(gesture, new android.accessibilityservice.AccessibilityService.GestureResultCallback() {
+                    @Override
+                    public void onCompleted(android.accessibilityservice.GestureDescription gestureDescription) {
+                        super.onCompleted(gestureDescription);
+                        completed[0] = true;
+                        success[0] = true;
+                        LogManager.log("✓ 简单点击完成");
+                    }
+                    
+                    @Override
+                    public void onCancelled(android.accessibilityservice.GestureDescription gestureDescription) {
+                        super.onCancelled(gestureDescription);
+                        completed[0] = true;
+                        success[0] = false;
+                        LogManager.log("✗ 简单点击取消");
+                    }
+                }, null);
+                
+                if (result) {
+                    // 等待手势完成
+                    int waitCount = 0;
+                    while (!completed[0] && waitCount < 15) { // 最多等待1.5秒
+                        try {
+                            Thread.sleep(100);
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                        waitCount++;
+                    }
+                    return success[0];
+                }
+                
+                LogManager.log("✗ 简单点击失败");
+                return false;
+            } catch (Exception e) {
+                Log.e(TAG, "简单点击失败: " + e.getMessage());
+                LogManager.log("✗ 简单点击异常: " + e.getMessage());
+                return false;
+            }
+        }
+        LogManager.log("✗ Android版本不支持手势点击");
+        return false;
+    }
+    
+    /**
+     * 截图并识别绿色按钮位置 - 兼容性版本
      */
     private void takeScreenshotAndFindGreenButton() {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
-            Log.w(TAG, "截图功能需要 Android 11+");
-            return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+ 使用新的无障碍截图API
+            takeScreenshotNew();
+        } else {
+            // 较旧版本使用传统方法
+            LogManager.log("当前Android版本不支持无障碍截图，尝试其他方法");
+            // 可以尝试通过节点分析来查找绿色按钮
+            findGreenButtonByNodeAnalysis();
         }
-        
+    }
+    
+    /**
+     * Android 11+ 的新截图方法
+     */
+    @SuppressWarnings("NewApi")
+    private void takeScreenshotNew() {
         try {
             Log.i(TAG, "开始截图识别绿色按钮...");
+            LogManager.log("开始截图识别绿色按钮...");
             
             // 使用无障碍服务的截图功能
             takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), 
-                new TakeScreenshotCallback() {
+                new AccessibilityService.TakeScreenshotCallback() {
                     @Override
-                    public void onSuccess(ScreenshotResult screenshotResult) {
+                    public void onSuccess(AccessibilityService.ScreenshotResult screenshotResult) {
                         try {
                             Bitmap bitmap = Bitmap.wrapHardwareBuffer(
                                 screenshotResult.getHardwareBuffer(),
@@ -980,39 +1034,88 @@ public class WeChatAccessibilityService extends AccessibilityService {
                             
                             if (bitmap != null) {
                                 Log.i(TAG, "截图成功: " + bitmap.getWidth() + "x" + bitmap.getHeight());
+                                LogManager.log("截图成功: " + bitmap.getWidth() + "x" + bitmap.getHeight());
                                 
                                 // 分析图像找绿色按钮
                                 android.graphics.Point greenButtonPos = findGreenButton(bitmap);
                                 
                                 if (greenButtonPos != null) {
                                     Log.i(TAG, "找到绿色按钮位置: (" + greenButtonPos.x + ", " + greenButtonPos.y + ")");
+                                    LogManager.log("✓ 找到绿色按钮位置: (" + greenButtonPos.x + ", " + greenButtonPos.y + ")");
                                     performGlobalClick(greenButtonPos.x, greenButtonPos.y);
                                 } else {
                                     Log.w(TAG, "未找到绿色按钮");
+                                    LogManager.log("✗ 未找到绿色按钮，尝试节点分析");
+                                    findGreenButtonByNodeAnalysis();
                                 }
                                 
                                 bitmap.recycle();
+                            } else {
+                                LogManager.log("✗ 截图结果为空");
+                                findGreenButtonByNodeAnalysis();
                             }
                         } catch (Exception e) {
                             Log.e(TAG, "处理截图失败: " + e.getMessage());
+                            LogManager.log("✗ 处理截图失败: " + e.getMessage());
                             e.printStackTrace();
+                            findGreenButtonByNodeAnalysis();
                         }
                     }
                     
                     @Override
                     public void onFailure(int errorCode) {
                         Log.e(TAG, "截图失败，错误码: " + errorCode);
+                        LogManager.log("✗ 截图失败，错误码: " + errorCode + "，尝试节点分析");
+                        findGreenButtonByNodeAnalysis();
                     }
                 });
                 
         } catch (Exception e) {
             Log.e(TAG, "截图异常: " + e.getMessage());
+            LogManager.log("✗ 截图异常: " + e.getMessage());
             e.printStackTrace();
+            findGreenButtonByNodeAnalysis();
         }
     }
     
     /**
-     * 分析图像找绿色按钮
+     * 通过节点分析查找绿色按钮（备用方案）
+     */
+    private void findGreenButtonByNodeAnalysis() {
+        LogManager.log("开始节点分析查找绿色按钮");
+        
+        AccessibilityNodeInfo rootNode = getRootInActiveWindow();
+        if (rootNode == null) {
+            LogManager.log("✗ 无法获取根节点");
+            return;
+        }
+        
+        // 查找可能的绿色按钮关键词
+        String[] greenButtonKeywords = {
+            "发送", "确定", "完成", "提交", "确认", "同意", 
+            "Send", "OK", "Done", "Submit", "Confirm", "Agree"
+        };
+        
+        for (String keyword : greenButtonKeywords) {
+            List<AccessibilityNodeInfo> nodes = rootNode.findAccessibilityNodeInfosByText(keyword);
+            if (nodes != null && !nodes.isEmpty()) {
+                for (AccessibilityNodeInfo node : nodes) {
+                    LogManager.log("找到可能的按钮: " + keyword);
+                    if (tryClickNode(node, "绿色按钮(" + keyword + ")")) {
+                        LogManager.log("✓ 成功点击按钮: " + keyword);
+                        rootNode.recycle();
+                        return;
+                    }
+                }
+            }
+        }
+        
+        LogManager.log("✗ 未找到匹配的绿色按钮");
+        rootNode.recycle();
+    }
+    
+    /**
+     * 分析图像找绿色按钮 - 优化版本
      */
     private android.graphics.Point findGreenButton(Bitmap bitmap) {
         try {
@@ -1020,69 +1123,123 @@ public class WeChatAccessibilityService extends AccessibilityService {
             int height = bitmap.getHeight();
             
             Log.i(TAG, "开始分析图像，尺寸: " + width + "x" + height);
+            LogManager.log("开始分析图像，尺寸: " + width + "x" + height);
             
-            // 只扫描屏幕下半部分（50%-90%）
-            int startY = height / 2;
-            int endY = (int)(height * 0.9);
+            // 多区域扫描策略
+            android.graphics.Point result = null;
             
-            // 扫描步长（每隔10个像素扫描一次，提高速度）
-            int step = 10;
+            // 1. 优先扫描常见按钮位置：屏幕底部右下角
+            result = scanRegionForGreen(bitmap, (int)(width * 0.7), width, (int)(height * 0.8), height, 8, "右下角");
+            if (result != null) return result;
             
-            int maxGreenScore = 0;
-            android.graphics.Point bestPosition = null;
+            // 2. 扫描屏幕底部中间区域
+            result = scanRegionForGreen(bitmap, (int)(width * 0.3), (int)(width * 0.7), (int)(height * 0.8), height, 8, "底部中间");
+            if (result != null) return result;
             
-            // 扫描图像
-            for (int y = startY; y < endY; y += step) {
-                for (int x = 0; x < width; x += step) {
-                    int pixel = bitmap.getPixel(x, y);
-                    
-                    // 提取 RGB 值
-                    int red = Color.red(pixel);
-                    int green = Color.green(pixel);
-                    int blue = Color.blue(pixel);
-                    
-                    // 判断是否为绿色
-                    // 绿色特征：G > R 且 G > B，且 G 值较高
-                    if (green > red + 30 && green > blue + 30 && green > 100) {
-                        // 计算绿色得分
-                        int greenScore = green - Math.max(red, blue);
-                        
-                        if (greenScore > maxGreenScore) {
-                            maxGreenScore = greenScore;
-                            bestPosition = new android.graphics.Point(x, y);
-                        }
-                    }
-                }
-            }
+            // 3. 扫描屏幕下半部分
+            result = scanRegionForGreen(bitmap, 0, width, height / 2, (int)(height * 0.9), 12, "下半部分");
+            if (result != null) return result;
             
-            if (bestPosition != null && maxGreenScore > 50) {
-                Log.i(TAG, "找到绿色区域，得分: " + maxGreenScore + ", 位置: (" + bestPosition.x + ", " + bestPosition.y + ")");
-                
-                // 在绿色区域周围寻找更精确的中心点
-                android.graphics.Point center = findGreenCenter(bitmap, bestPosition.x, bestPosition.y);
-                return center != null ? center : bestPosition;
-            }
+            // 4. 扫描整个屏幕（最后手段）
+            result = scanRegionForGreen(bitmap, 0, width, 0, height, 15, "全屏");
+            if (result != null) return result;
             
-            Log.w(TAG, "未找到明显的绿色区域");
+            LogManager.log("✗ 未找到绿色按钮");
             return null;
             
         } catch (Exception e) {
             Log.e(TAG, "分析图像异常: " + e.getMessage());
+            LogManager.log("✗ 分析图像异常: " + e.getMessage());
             e.printStackTrace();
             return null;
         }
     }
     
     /**
-     * 在绿色区域周围找到中心点
+     * 在指定区域扫描绿色按钮
+     */
+    private android.graphics.Point scanRegionForGreen(Bitmap bitmap, int startX, int endX, int startY, int endY, int step, String regionName) {
+        LogManager.log("扫描区域: " + regionName + " (" + startX + "," + startY + ")-(" + endX + "," + endY + ")");
+        
+        int maxGreenScore = 0;
+        android.graphics.Point bestPosition = null;
+        
+        for (int y = startY; y < endY; y += step) {
+            for (int x = startX; x < endX; x += step) {
+                try {
+                    int pixel = bitmap.getPixel(x, y);
+                    int greenScore = calculateGreenScore(pixel);
+                    
+                    if (greenScore > maxGreenScore && greenScore > 80) { // 提高阈值
+                        maxGreenScore = greenScore;
+                        bestPosition = new android.graphics.Point(x, y);
+                    }
+                } catch (Exception e) {
+                    // 忽略越界错误
+                    continue;
+                }
+            }
+        }
+        
+        if (bestPosition != null) {
+            LogManager.log("✓ 在" + regionName + "找到绿色区域，得分: " + maxGreenScore + ", 位置: (" + bestPosition.x + ", " + bestPosition.y + ")");
+            
+            // 在绿色区域周围寻找更精确的中心点
+            android.graphics.Point center = findGreenCenter(bitmap, bestPosition.x, bestPosition.y);
+            return center != null ? center : bestPosition;
+        }
+        
+        return null;
+    }
+    
+    /**
+     * 计算绿色得分（更精确的绿色检测算法）
+     */
+    private int calculateGreenScore(int pixel) {
+        int red = Color.red(pixel);
+        int green = Color.green(pixel);
+        int blue = Color.blue(pixel);
+        
+        // 微信绿色按钮的特征值
+        // 一般是 RGB(7, 193, 96) 或类似的绿色
+        
+        // 基础绿色检测：绿色明显高于红色和蓝色
+        if (green < 120 || green <= red + 40 || green <= blue + 40) {
+            return 0;
+        }
+        
+        // 计算与微信绿色的相似度
+        int targetR = 7, targetG = 193, targetB = 96;
+        
+        // 欧几里得距离（越小越相似）
+        int distance = (int) Math.sqrt(
+            Math.pow(red - targetR, 2) + 
+            Math.pow(green - targetG, 2) + 
+            Math.pow(blue - targetB, 2)
+        );
+        
+        // 距离越小，得分越高（最大200分）
+        int similarityScore = Math.max(0, 200 - distance);
+        
+        // 绿色强度得分
+        int intensityScore = green - Math.max(red, blue);
+        
+        // 综合得分
+        int totalScore = similarityScore + intensityScore;
+        
+        return totalScore;
+    }
+    
+    /**
+     * 在绿色区域周围找到中心点 - 优化版本
      */
     private android.graphics.Point findGreenCenter(Bitmap bitmap, int startX, int startY) {
         try {
             int width = bitmap.getWidth();
             int height = bitmap.getHeight();
             
-            // 在起始点周围 100x100 的区域内寻找绿色中心
-            int searchRadius = 50;
+            // 在起始点周围 80x80 的区域内寻找绿色中心
+            int searchRadius = 40;
             int minX = Math.max(0, startX - searchRadius);
             int maxX = Math.min(width - 1, startX + searchRadius);
             int minY = Math.max(0, startY - searchRadius);
@@ -1090,34 +1247,43 @@ public class WeChatAccessibilityService extends AccessibilityService {
             
             int totalX = 0;
             int totalY = 0;
+            int totalScore = 0;
             int greenCount = 0;
             
-            for (int y = minY; y <= maxY; y++) {
-                for (int x = minX; x <= maxX; x++) {
-                    int pixel = bitmap.getPixel(x, y);
-                    int red = Color.red(pixel);
-                    int green = Color.green(pixel);
-                    int blue = Color.blue(pixel);
-                    
-                    if (green > red + 30 && green > blue + 30 && green > 100) {
-                        totalX += x;
-                        totalY += y;
-                        greenCount++;
+            LogManager.log("搜索绿色中心，区域: (" + minX + "," + minY + ")-(" + maxX + "," + maxY + ")");
+            
+            for (int y = minY; y <= maxY; y += 2) { // 步长为2，提高速度
+                for (int x = minX; x <= maxX; x += 2) {
+                    try {
+                        int pixel = bitmap.getPixel(x, y);
+                        int greenScore = calculateGreenScore(pixel);
+                        
+                        if (greenScore > 60) { // 使用新的绿色检测算法
+                            totalX += x * greenScore; // 权重计算
+                            totalY += y * greenScore;
+                            totalScore += greenScore;
+                            greenCount++;
+                        }
+                    } catch (Exception e) {
+                        continue;
                     }
                 }
             }
             
-            if (greenCount > 0) {
-                int centerX = totalX / greenCount;
-                int centerY = totalY / greenCount;
-                Log.i(TAG, "绿色中心点: (" + centerX + ", " + centerY + "), 绿色像素数: " + greenCount);
+            if (greenCount > 0 && totalScore > 0) {
+                int centerX = totalX / totalScore; // 基于权重的中心点
+                int centerY = totalY / totalScore;
+                
+                LogManager.log("✓ 绿色中心点: (" + centerX + ", " + centerY + "), 绿色像素数: " + greenCount + ", 总得分: " + totalScore);
                 return new android.graphics.Point(centerX, centerY);
             }
             
+            LogManager.log("✗ 未找到足够的绿色像素");
             return null;
             
         } catch (Exception e) {
             Log.e(TAG, "查找绿色中心异常: " + e.getMessage());
+            LogManager.log("✗ 查找绿色中心异常: " + e.getMessage());
             return null;
         }
     }
